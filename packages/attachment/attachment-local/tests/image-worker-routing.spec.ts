@@ -2,9 +2,11 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import type { ImageWorkerRequest } from '../src/image-worker-protocol.ts'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-const run = vi.fn()
+const run = vi.fn<(request: ImageWorkerRequest, signal?: AbortSignal) => Promise<unknown>>()
 const dispose = vi.fn()
 vi.mock('../src/image-worker-client.ts', () => ({
   ImageWorkerClient: class {
@@ -52,7 +54,7 @@ it('validates through the worker when one is configured', async () => {
   })
   await store.validateImage({ data: DATA, mediaType: 'image/png', name: 'a.png' })
   expect(run).toHaveBeenCalledTimes(1)
-  const request = run.mock.calls[0][0]
+  const request = run.mock.calls[0]![0] as Extract<ImageWorkerRequest, { operation: 'prepare' }>
   expect(request).toMatchObject({ operation: 'prepare', input: { mediaType: 'image/png', name: 'a.png' } })
   expect(request.input.data).toBe(Buffer.from(DATA).toString('base64'))
 })
@@ -62,13 +64,13 @@ it('reads through the worker when one is configured', async () => {
     dshHome: await home(),
     imageWorker: { node: '/usr/bin/node', timeoutMs: 30_000 },
   })
-  const stored = await store.readImage({ attachmentId: 'sha256:' + 'b'.repeat(64), mediaType: 'image/png', bytes: DATA.byteLength, width: 1, height: 1 })
+  const stored = await store.readImage({ attachmentId: AttachmentId('sha256:' + 'b'.repeat(64)), mediaType: 'image/png', bytes: DATA.byteLength, width: 1, height: 1 })
   expect(run).toHaveBeenCalledWith(expect.objectContaining({ operation: 'read' }), undefined)
   expect(Buffer.from(stored.data)).toEqual(Buffer.from(DATA))
 })
 
 it('projects a request image through the worker', async () => {
-  const ref = { attachmentId: 'sha256:' + 'c'.repeat(64), mediaType: 'image/png', bytes: DATA.byteLength, width: 1, height: 1 }
+  const ref = { attachmentId: AttachmentId('sha256:' + 'c'.repeat(64)), mediaType: 'image/png' as const, bytes: DATA.byteLength, width: 1, height: 1 }
   run.mockResolvedValue({
     variantId: 'sha256:' + 'd'.repeat(64),
     attachment: ref,
@@ -85,7 +87,7 @@ it('projects a request image through the worker', async () => {
     dshHome: await home(),
     imageWorker: { node: '/usr/bin/node', timeoutMs: 30_000 },
   })
-  const projected = await store.readImageRequest(ref, {})
+  const projected = await store.readImageRequest(ref, { width: 1, height: 1, maxBytes: DATA.byteLength })
   expect(run).toHaveBeenCalledWith(expect.objectContaining({ operation: 'request' }), expect.anything())
   expect(projected.bytes).toBe(DATA.byteLength)
 })

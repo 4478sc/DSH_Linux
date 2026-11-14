@@ -98,8 +98,13 @@ jobs:
           find apps/web/dist -name '*.map' -delete
           cp apps/web/dist/preview.html apps/web/dist/index.html
 
+      # Publishing belongs to the upstream repository that owns the Cloudflare
+      # project and its Access application. A fork builds the same page but never
+      # uploads or comments: it has no project to deploy into, and a pull request
+      # must not create an external deployment as a side effect.
       - name: Upload to Cloudflare Pages
         id: upload
+        if: github.repository == 'deepseek-ai/deepseek-harness'
         continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -126,6 +131,7 @@ jobs:
       # about what the platform does with a body that is already compressed.
       - name: Verify the protected deployment serves the image
         id: verify
+        if: github.repository == 'deepseek-ai/deepseek-harness'
         continue-on-error: true
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
@@ -167,6 +173,7 @@ jobs:
       # sees an `opened` event, and every later push must not restate the URL.
       - name: Comment the preview URL
         id: comment
+        if: github.repository == 'deepseek-ai/deepseek-harness'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
