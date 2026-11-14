@@ -86,7 +86,7 @@ it('projects a request image through the worker', async () => {
     dshHome: await home(),
     imageWorker: { node: '/usr/bin/node', timeoutMs: 30_000 },
   })
-  const projected = await store.readImageRequest(ref, {})
+  const projected = await store.readImageRequest(ref, { width: 1, height: 1, maxBytes: DATA.byteLength })
   expect(run).toHaveBeenCalledWith(expect.objectContaining({ operation: 'request' }), expect.anything())
   expect(projected.bytes).toBe(DATA.byteLength)
 })
