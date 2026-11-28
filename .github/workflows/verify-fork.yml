@@ -87,6 +87,9 @@ jobs:
       - name: Install (immutable)
         run: pnpm install --frozen-lockfile
 
+      - name: Build native system binding
+        run: pnpm run build:native-system
+
       - name: Run approval, image worker routing and CI contract suites
         run: >-
           pnpm exec vitest run
