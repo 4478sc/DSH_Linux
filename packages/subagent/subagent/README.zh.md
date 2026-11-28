@@ -48,6 +48,12 @@ kind: "package-reference"
 
 **插件 → 子智能体**页面的限制部分编辑 Host 的 `subagent` 设置分节。用户值覆盖本插件的组合配置；恢复默认会删除用户覆盖。`maxDepth` 默认为 `1`，在委派工具自身未配置深度时提供默认值。工具显式指定的深度（包括 `provider-managed`）优先。深度 `0` 禁止继承此设置的工具委派；深度 `1` 只允许直接子代理。修改在下一次委派时生效。直接调用服务的调用方仍自行提供可选的请求深度。
 
+### 子级写审批转发
+
+委派子级的审批策略被固定为 `never`，因此它发起的每次沙箱升级请求都会在应答方运行之前被拒绝。把 Host 的 `childWriteApproval` 设为 `forward`（默认 `deny`）才开启唯一例外：目标位于子级工作目录之外的单文件 `write` 可以转发到委派会话自己的审批通道，由正在查看该父会话的用户一次性决定。父会话的 `never` 策略仍会拒绝它，父会话没有打开的轮次时失败关闭，部署改回 `deny` 后子级下一次请求即被拒绝。
+
+转发出去的是真实的父会话审批：`approval/asked` 与 `approval/decided` 写入父会话日志并携带父侧决定，子级自己的审计对则记录原始调用。`childWriteApprovalTimeoutMs`（默认 `300000`）限制单次请求；超时、拒绝、取消、撤回请求、缺失 GUI、血缘或参数校验失败、以及重新关闭开关，都会让原始调用保持被拒。这里不改变任何沙箱模式：批准得到的是既有的、仅作用于该次调用的 `danger-full-access` 策略，由子级自己的工具调用消费，其他需要审批的操作仍然被拒绝。
+
 ### Activation 容量
 
 在 Host 插件上设置 `maxActiveSubagents`，限制每棵 subagent 树中在线和正在创建的子级数量。默认值为 `8`，接受正安全整数。顶层父级建立由本地和外部后代共享的池，根父级不占名额。新建和冷恢复在让出执行前预留名额，资源释放完成后才归还。有待处理收件箱内容以及正在停止的 activation 仍计入容量；向驻留子级发送消息复用其名额。委派深度是独立策略。
@@ -111,6 +117,7 @@ kind: "package-reference"
 | [`src/descriptor.ts`](src/descriptor.ts) | 版本化的 `subagent/descriptor` 会话事件词汇 |
 | [`src/catalog.ts`](src/catalog.ts) | parent 自有的 `subagent/catalog` 事件与分块 host projection |
 | [`src/child-agent.ts`](src/child-agent.ts) | 子级组装、委派策略、深度辅助函数 |
+| [`src/child-write-approval.ts`](src/child-write-approval.ts) | 把唯一的委派请求类别转发到父会话审批通道的可选路径 |
 | [`src/list-children.ts`](src/list-children.ts) | 直接与递归的 parent 目录读取 |
 | [`src/control.ts`](src/control.ts) | 浏览器控制请求校验与稳定失败分码 |
 | [`src/control-types.ts`](src/control-types.ts) | client-safe 的目录行、控制面请求、回执与失败 |
@@ -224,6 +231,24 @@ You are a delegated subagent: your permission scope was fixed when you were star
 
 子级内部前缀稳定：该声明在子 agent 生命周期内绝不变化，因此只写入第一份运行时上下文快照一次。父级侧不会直接使缓存失效；具名工具消费方共同负责请求前缀的任何变化。
 
+### 转发的子级写审批
+
+#### 模型看到什么
+
+启用 `childWriteApproval: 'forward'` 时，子级的运行时上下文快照在委派范围声明之后追加一条固定例外语句。
+
+```markdown
+One exception applies to this delegation: a single-file `write` whose target lies outside your working directory may be sent to the delegating session's user for one-shot approval and, if approved, runs once with the wider permission. Every other operation that requires approval is rejected — do not retry it.
+```
+
+#### Token 影响
+
+每个开启转发的子级一条固定语句；保持默认 `deny` 的部署不新增任何内容。
+
+#### KV Cache 影响
+
+子级内部前缀稳定，且不出现在任何父级请求中；为某次委派开启或关闭只改变该子级的第一份运行时上下文快照。
+
 ## 已知限制与延期工作
 
 <a id="known-limitations-and-deferred-work"></a>
@@ -240,6 +265,7 @@ You are a delegated subagent: your permission scope was fixed when you were star
 - **驻留仅限进程内**——Activation inbox 与所有权图不会在两个 harness 进程之间协调；对单个持久化存储的并发访问需要持久化邮箱与跨进程租约协议。
 - **不回放已接受但未记录的消息**——崩溃可能丢失从未写入子会话日志、已被接受的提示词；丢失的消息不会自动回放。
 - **生命周期事件只供观察**——影响运行的 `subagent/end` 延续或决策接口仍需等待具体消费方。
+- **转发的子级写审批按委派作用域且只在新建时可用**——路由在委派时捕获；冷恢复的子级通过本地失败关闭保护重放其固定策略，绝不转发。覆盖其他请求类别（或其他变更族）需要各自明确的决定，并且请求发生时父会话必须存在可用的审批通道与打开的轮次。
 
 <a id="dev-note"></a>
 ### 开发备注

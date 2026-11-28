@@ -25,6 +25,8 @@ import type {} from '@deepseek-ai/dsh-permission-presets'
 // keeps its model-facing rows on the host plane, where the child already sees
 // them through the tool registry's global layer.
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
+import { CHILD_WRITE_APPROVAL_CONTEXT } from './child-write-approval.ts'
+import type { ChildWriteApprovalMode } from './child-write-approval.ts'
 import { delegationDepthOf } from './depth.ts'
 import { SubagentError } from './error.ts'
 
@@ -161,6 +163,12 @@ export interface ChildComposition {
   readonly persona?: string | undefined
   /** Historical descriptor tool restriction reapplied only during cold resume. */
   readonly toolFilter?: ToolRestriction | undefined
+  /**
+   * Whether this child may send its one covered out-of-workspace single-file
+   * write escalation to the delegating session's user. Only the delegation that
+   * opted in sets it; the appended context sentence tells the child the real scope.
+   */
+  readonly childWriteApproval?: boolean | undefined
 }
 
 /**
@@ -206,7 +214,9 @@ function applyChildOverrides(childCtx: Context, composition: ChildComposition): 
   childCtx.systemPrompt.context({
     name: 'subagent:delegation',
     order: childCtx.systemPrompt.getContextOrder('SUBAGENT_DELEGATION'),
-    text: SUBAGENT_DELEGATION_CONTEXT,
+    text: composition.childWriteApproval === true
+      ? `${SUBAGENT_DELEGATION_CONTEXT} ${CHILD_WRITE_APPROVAL_CONTEXT}`
+      : SUBAGENT_DELEGATION_CONTEXT,
   })
   if (composition.persona !== undefined) {
     childCtx.systemPrompt.section({
@@ -228,11 +238,19 @@ export interface DelegatedPolicyOverrides {
   /** The parent session's explicit sandbox-mode override, or `undefined` without one. */
   readonly sandboxMode: SandboxMode | undefined
   /**
-   * `'never'` whenever the approval capability is composed, `undefined`
-   * otherwise: a delegated child acts only within the sandbox scope fixed at
-   * delegation, so its asks are rejected deterministically.
+   * `'never'` whenever the approval capability is composed without an opted-in
+   * forwarding route; `'ask'` only when the deployment forwarded exactly one ask
+   * class to the delegating session's user; `undefined` without the approval
+   * capability (a delegated child otherwise acts only within the sandbox scope
+   * fixed at delegation, so its asks are rejected deterministically).
    */
-  readonly approvalPolicy: 'never' | undefined
+  readonly approvalPolicy: 'ask' | 'never' | undefined
+  /**
+   * `'forward'` when this delegation opted the child into the one covered ask
+   * class (an out-of-workspace single-file write escalation presented through the
+   * parent session's own approval channel); absent means the pinned `never` rule.
+   */
+  readonly childWriteApproval?: 'forward'
 }
 
 /**
@@ -241,17 +259,33 @@ export interface DelegatedPolicyOverrides {
  * parent's future, not to this child. Auto and Full access identities are
  * inherited only through the in-process DSH path so either can replace a stale
  * same-bundle fork value. Only the parent session's explicit sandbox override
- * is captured — never deployment defaults or one-shot grants — and the approval
- * policy is pinned to `'never'` regardless of the parent's own policy.
+ * is captured — never deployment defaults or one-shot grants.
+ *
+ * The approval policy is pinned to `'never'` unless the deployment explicitly
+ * opted into child write-approval forwarding AND that parent session's own
+ * effective policy can prompt (`ask`): then the child keeps `ask` and the
+ * delegating session receives exactly one covered ask class through its own
+ * approval channel. A parent `never` policy still wins, so a deployment or
+ * session with disabled approvals never forwards anything.
  * @param parent - the delegating parent agent.
- * @returns the sandbox override (or `undefined` without one) and the approval pin.
+ * @param childWriteApproval - the deployment's forwarding mode at delegation.
+ * @returns the sandbox override (or `undefined` without one), the approval seed, and the forwarding mark.
  */
-export function captureDelegatedPolicyOverrides(parent: Agent): DelegatedPolicyOverrides {
+export function captureDelegatedPolicyOverrides(
+  parent: Agent,
+  childWriteApproval: ChildWriteApprovalMode = 'deny',
+): DelegatedPolicyOverrides {
   const preset = parent.ctx.get('permissionPresets')?.current(parent.session)
+  const approval = parent.ctx.get('approval')
+  const parentPolicy = approval === undefined
+    ? undefined
+    : approval.overrideOf(parent.session) ?? approval.config.policy ?? 'ask'
+  const forward = childWriteApproval === 'forward' && approval !== undefined && parentPolicy === 'ask'
   return {
     permissionPreset: preset === 'auto' || preset === 'danger-full-access' ? preset : undefined,
     sandboxMode: parent.ctx.get('sandboxPolicy')?.overrideOf(parent.session),
-    approvalPolicy: parent.ctx.get('approval') === undefined ? undefined : 'never',
+    approvalPolicy: approval === undefined ? undefined : forward ? 'ask' : 'never',
+    ...forward ? { childWriteApproval: 'forward' as const } : {},
   }
 }
 

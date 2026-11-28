@@ -13,7 +13,7 @@ import { FiberState, type Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { ReasoningEffortId, contentHasImage, createUserMessage, errorChain } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, MessageId, MessageSource } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, MessageId, MessageSource, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { Session, SessionId, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
@@ -24,6 +24,8 @@ import {
   childSessionMeta, resolveChildAgentOptions, resolveChildDepth,
 } from './child-agent.ts'
 import type { ChildComposition, DelegatedPolicyOverrides } from './child-agent.ts'
+import { installChildWriteApprovalForwarder, installResumedChildApprovalGuard } from './child-write-approval.ts'
+import type { ChildWriteApprovalSettings } from './child-write-approval.ts'
 import {
   createAgentMessage, createSettlementMessage, withResultDeliveryGuidance,
 } from './continuation-messages.ts'
@@ -151,6 +153,12 @@ export class SubagentManager {
   private readonly closingRoots = new Set<Agent>()
   /** Sibling names held by creations that have not committed their catalog entry. */
   private readonly names = new SiblingNameReservations()
+  /**
+   * Live child tool-call arguments keyed by Session and call id, fed from delivered
+   * `session/event` records. Only opted-in children are tracked; an entry is dropped
+   * at its `tool/result` or with the child, so no historical Session read is needed.
+   */
+  private readonly childWriteCalls = new Map<SessionId, Map<ToolCallId, string>>()
   private draining = false
 
   /**
@@ -158,11 +166,13 @@ export class SubagentManager {
    * @param ctx - context providing Agents, Sessions, and teardown ownership.
    * @param host - descriptor reads and lifecycle publication owned by the service.
    * @param maxActiveSubagents - the current configured child capacity.
+   * @param writeApproval - the current child write-approval settings, read at delegation and at every ask.
    */
   constructor(
     private readonly ctx: Context,
     private readonly host: SubagentHost,
     private readonly maxActiveSubagents: () => number,
+    private readonly writeApproval: () => ChildWriteApprovalSettings,
   ) {
     // Drain managed instances before Cordis releases their owning scope.
     const scope = ctx.plugin(function activationOwner() {})
@@ -171,8 +181,15 @@ export class SubagentManager {
       const activation = this.resident.get(agent.id)
       return activation !== undefined && activationAgent(activation) === agent ? activation.ancestors : undefined
     }, session => host.identityOf(session))
+    ctx.on('session/event', (session, event) => {
+      const calls = this.childWriteCalls.get(session.id)
+      if (calls === undefined) return
+      if (event.type === 'tool/call') calls.set(event.data.callId, event.data.arguments)
+      else if (event.type === 'tool/result') calls.delete(event.data.message.toolCallId)
+    })
     ctx.on('agent/disposed', ({ agent }) => {
       this.closingRoots.delete(agent)
+      this.childWriteCalls.delete(agent.id)
       const activation = this.resident.get(agent.id)
       if (activation?.kind === 'local' && activation.handle.agent === agent) {
         void this.close(activation, () => this.finishDisposal(activation, false)).catch((error: unknown) => {
@@ -351,7 +368,7 @@ export class SubagentManager {
       })
       // Capture before the first await: a later parent switch belongs to the
       // parent's future, not to this child.
-      const delegatedPolicies = captureDelegatedPolicyOverrides(parent)
+      const delegatedPolicies = captureDelegatedPolicyOverrides(parent, this.writeApproval().mode)
 
       const cwd = await this.resolveDirectory(spec, signal)
       const prepared = await prepare({
@@ -395,7 +412,10 @@ export class SubagentManager {
             descriptor,
           },
           agentOptions,
-          composition: { agentPreset: spec.agentPreset },
+          composition: {
+            agentPreset: spec.agentPreset,
+            childWriteApproval: delegatedPolicies.childWriteApproval === 'forward',
+          },
           signal,
           delivery: spec.delivery,
           outputSchema: spec.outputSchema,
@@ -840,6 +860,16 @@ export class SubagentManager {
           await workingDirectory.set(child, create.cwd, inputs.signal)
         }
         if (inputs.composition.agentPreset === undefined) await applyChildComposition(childCtx, create?.parent, inputs.composition)
+        // A fresh opted-in delegation installs the single forwarded ask route; a
+        // cold resume replays whatever policy the log carries but has no captured
+        // parent route, so it installs the fail-closed guard instead.
+        if (create !== undefined && create.delegatedPolicies.childWriteApproval === 'forward') {
+          const calls = new Map<ToolCallId, string>()
+          this.childWriteCalls.set(child.session.id, calls)
+          installChildWriteApprovalForwarder(child, create.parent, this.writeApproval, calls)
+        } else if (create === undefined) {
+          installResumedChildApprovalGuard(child)
+        }
         if (inputs.outputSchema !== undefined) {
           structured = attachStructuredRuntime(childCtx, inputs.outputSchema, () =>
             child.inbox.nextStep.length === 0
