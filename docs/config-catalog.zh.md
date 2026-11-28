@@ -3744,7 +3744,7 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 
 - `inject`: `workingDirectory` · `sessionProjections`
 - `refs`: `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/subagent/subagent/src/index.ts:186`](../packages/subagent/subagent/src/index.ts)
+- `source`: [`packages/subagent/subagent/src/index.ts:189`](../packages/subagent/subagent/src/index.ts)
 
 ```ts config-catalog
 /** Host configuration for continuable subagent capacity. */
@@ -3753,7 +3753,19 @@ export interface Config {
   maxActiveSubagents: Volatile<number>
   /** Default delegation depth for tools without an explicit limit; defaults to 1. */
   maxDepth: Volatile<number>
+  /**
+   * Opt-in switch for ONE delegated ask class: `forward` lets a delegated child's
+   * out-of-workspace single-file `write` escalation reach the delegating session's
+   * own approval channel (its GUI user), still subject to that session's policy;
+   * `deny` (the default) keeps the pinned `never` rule for every child ask.
+   */
+  childWriteApproval: Volatile<ChildWriteApprovalMode>
+  /** Fail-closed lifetime of one forwarded child write approval, in milliseconds; defaults to five minutes. */
+  childWriteApprovalTimeoutMs: Volatile<number>
 }
+
+/** The deployment switch: `deny` keeps the pinned `never` child policy, `forward` opts into the one covered ask class. */
+export type ChildWriteApprovalMode = 'deny' | 'forward'
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-subagent -->
 
