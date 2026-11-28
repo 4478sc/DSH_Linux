@@ -45,6 +45,8 @@ import { Remote, RemoteError, TypertRemoteService, principalOf, type Principal }
 import {
   rejectPrompt, validateControlRequest,
 } from './control.ts'
+import { DEFAULT_CHILD_WRITE_APPROVAL_TIMEOUT_MS } from './child-write-approval.ts'
+import type { ChildWriteApprovalMode } from './child-write-approval.ts'
 import type {
   SubagentInterruptReceipt,
   SubagentPromptReceipt,
@@ -111,6 +113,7 @@ export type {
 export { STRUCTURED_OUTPUT_TOOL } from './structured.ts'
 export { SubagentError } from './error.ts'
 export { assertSubagentMaxDepth, delegationDepthOf } from './depth.ts'
+export type { ChildWriteApprovalMode } from './child-write-approval.ts'
 export {
   appendDelegatedPolicyOverrides,
   applyChildComposition,
@@ -188,6 +191,15 @@ export interface Config {
   maxActiveSubagents: Volatile<number>
   /** Default delegation depth for tools without an explicit limit; defaults to 1. */
   maxDepth: Volatile<number>
+  /**
+   * Opt-in switch for ONE delegated ask class: `forward` lets a delegated child's
+   * out-of-workspace single-file `write` escalation reach the delegating session's
+   * own approval channel (its GUI user), still subject to that session's policy;
+   * `deny` (the default) keeps the pinned `never` rule for every child ask.
+   */
+  childWriteApproval: Volatile<ChildWriteApprovalMode>
+  /** Fail-closed lifetime of one forwarded child write approval, in milliseconds; defaults to five minutes. */
+  childWriteApprovalTimeoutMs: Volatile<number>
 }
 
 /** Named provider registry with managed activations, durable discovery, and local child messaging. */
@@ -195,6 +207,8 @@ export class SubagentRuntime extends TypertRemoteService {
   static Config = z.object({
     maxDepth: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(1).volatile(),
     maxActiveSubagents: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(8).volatile(),
+    childWriteApproval: z.union(['deny', 'forward'] as const).default('deny').volatile(),
+    childWriteApprovalTimeoutMs: z.number().step(1).min(1).default(DEFAULT_CHILD_WRITE_APPROVAL_TIMEOUT_MS).volatile(),
   })
   static inject = ['workingDirectory', 'sessionProjections']
   private providers = new Map<string, SubagentProvider>()
@@ -222,7 +236,10 @@ export class SubagentRuntime extends TypertRemoteService {
         identityOf: session => identityProjection.stateOf(session).identity,
         catalogOf: session => subagentCatalogProjectionDefinition.wire.view(catalogProjection.stateOf(session)),
         emitLifecycle: this.emitLifecycle,
-      }, () => this.config.maxActiveSubagents.get())
+      }, () => this.config.maxActiveSubagents.get(), () => ({
+        mode: this.config.childWriteApproval.get(),
+        timeoutMs: this.config.childWriteApprovalTimeoutMs.get(),
+      }))
       this.manager = manager
       childCtx.effect(() => () => {
         /* v8 ignore else -- one injected binding owns the slot until its fiber disposes. */
