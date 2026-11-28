@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { AttachmentId, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { ImageWorkerRequest } from '../src/image-worker-protocol.ts'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-const run = vi.fn()
+const run = vi.fn<(request: ImageWorkerRequest, signal?: AbortSignal) => Promise<unknown>>()
 const dispose = vi.fn()
 vi.mock('../src/image-worker-client.ts', () => ({
   ImageWorkerClient: class {
@@ -56,6 +57,8 @@ it('validates through the worker when one is configured', async () => {
   const [firstCall] = run.mock.calls
   if (firstCall === undefined) throw new Error('image worker was not called')
   const request = firstCall[0]
+  expect(request.operation).toBe('prepare')
+  if (request.operation !== 'prepare') throw new Error('expected a prepare request')
   expect(request).toMatchObject({ operation: 'prepare', input: { mediaType: 'image/png', name: 'a.png' } })
   expect(request.input.data).toBe(Buffer.from(DATA).toString('base64'))
 })
