@@ -63,6 +63,37 @@ jobs:
         run: pnpm run check:ci:lint:contracts-ready
 
   # The upstream static lane: archive, ownership, doc and config gates. It owns no build.
+
+  targeted-tests:
+    name: pull-request targeted tests (hosted)
+    # Daily pull-request signal: the approval gate, the attachment image-worker
+    # routing suites and the CI workflow contract tests. The full coverage gate
+    # stays dispatch-only because its 100%-per-file threshold and pty-heavy
+    # suites are not stable on a 4-core hosted image.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install (immutable)
+        run: pnpm install --frozen-lockfile
+
+      - name: Run approval, image worker routing and CI contract suites
+        run: >-
+          pnpm exec vitest run
+          packages/subagent/subagent/tests/child-write-approval.spec.ts
+          packages/attachment/attachment-local/tests
+          scripts/ci-workflow.spec.ts
+          scripts/tests/ci-master-platforms.spec.ts
   static:
     name: static gates (hosted)
     if: github.event_name == 'workflow_dispatch'
@@ -94,10 +125,7 @@ jobs:
 
   coverage:
     name: coverage gate (hosted)
-    # Manual dispatch keeps its historical behaviour. Pull requests run this hosted
-    # gate as the daily verification path unless the self-hosted lanes are opted in
-    # through DSH_CI_SELFHOSTED_PR, which keeps exactly one coverage path active.
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && vars.DSH_CI_SELFHOSTED_PR != 'true')
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     env:

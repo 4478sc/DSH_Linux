@@ -48,6 +48,12 @@ The tool returns the child's name immediately. The parent receives a completion 
 
 The limits section on the **Plugins → Subagent** page edits the Host’s `subagent` settings section. User values override this plugin's composition; reset removes the user override. `maxDepth` defaults to `1` and supplies the delegation tools' depth when their own configuration omits it. An explicit tool depth, including `provider-managed`, takes precedence. Depth `0` disables delegation through tools inheriting this setting; depth `1` permits direct children only. Changes apply on the next delegation attempt. Direct service callers continue to supply their own optional request depth.
 
+### Child write approval forwarding
+
+A delegated child's approval policy is pinned to `never`, so every sandbox escalation it asks for is rejected before any answerer runs. Set the Host's `childWriteApproval` to `forward` (default `deny`) to opt into exactly one exception: a single-file `write` whose target lies outside the child's working directory may be forwarded to the delegating session's own approval channel, where the user already looking at that parent session decides once. The parent session's `never` policy still rejects it, a parent session with no open turn fails closed, and a child whose deployment reverted to `deny` is denied at its next ask.
+
+The forwarded ask is a real parent-session approval: `approval/asked` and `approval/decided` land on the parent session's log with the parent-side decision, while the child's own audit pair records the original call. `childWriteApprovalTimeoutMs` (default `300000`) bounds one ask; a timeout, rejection, cancellation, withdrawn request, missing GUI, failed lineage or argument check, or opting back out leaves the original call denied. Nothing here changes a sandbox mode: a grant is the existing one-shot per-call `danger-full-access` policy that the child's own tool call consumes, and every other approval-requiring operation stays rejected.
+
 ### Activation capacity
 
 Set `maxActiveSubagents` on the host plugin to limit live and materializing children in each subagent tree. It defaults to `8` and accepts positive safe integers. A top-level parent starts a pool shared by its local and external descendants; the root parent consumes no slot. Creation and cold resume reserve before yielding, and disposal returns the slot only after cleanup. Instances with pending inbox work and stopping activations remain counted. Sending to a resident child reuses its slot. Delegation depth is a separate policy.
@@ -111,6 +117,7 @@ This section explains how the service is built and where the observable behavior
 | [`src/descriptor.ts`](src/descriptor.ts) | Versioned `subagent/descriptor` session-event vocabulary |
 | [`src/catalog.ts`](src/catalog.ts) | Parent-owned `subagent/catalog` event and chunked host projection |
 | [`src/child-agent.ts`](src/child-agent.ts) | Child composition, delegated policy, depth helpers |
+| [`src/child-write-approval.ts`](src/child-write-approval.ts) | Opted-in forwarding of one delegated ask class to the parent session's approval channel |
 | [`src/list-children.ts`](src/list-children.ts) | Direct and recursive parent-catalog reads |
 | [`src/control.ts`](src/control.ts) | Browser control request validation and stable failure codes |
 | [`src/control-types.ts`](src/control-types.ts) | Client-safe catalog row, control requests, receipts, and failures |
@@ -224,6 +231,24 @@ One fixed statement in each child's runtime-context snapshot; none in the parent
 
 Prefix-stable within a child: the statement never changes during the child's lifetime, so it is written once into the first runtime-context snapshot. Parent-side, no direct invalidation; the named tool consumers own any request-prefix changes.
 
+### Forwarded child write approval
+
+#### What the model sees
+
+With `childWriteApproval: 'forward'`, the child's runtime-context snapshot carries the delegation-scope statement above plus one fixed exception sentence appended to the same contribution.
+
+```markdown
+One exception applies to this delegation: a single-file `write` whose target lies outside your working directory may be sent to the delegating session's user for one-shot approval and, if approved, runs once with the wider permission. Every other operation that requires approval is rejected — do not retry it.
+```
+
+#### Token effect
+
+One fixed sentence per opted-in child; deployments leaving the default `deny` add nothing.
+
+#### KV Cache effect
+
+Prefix-stable within a child and absent from every parent request; opting in or out changes only that child's first runtime-context snapshot.
+
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>
@@ -240,6 +265,7 @@ These limits define when the seam is a poor fit or needs special operational car
 - **Process-local residency** — the Activation inbox and ownership graph do not coordinate two harness processes; concurrent access to one persistence store needs a durable mailbox and cross-process lease protocol.
 - **No replay of accepted-but-unlogged messages** — a crash can lose an accepted prompt that never reached the child's session log; the lost message is not replayed automatically.
 - **Lifecycle events are observe-only** — a run-affecting `subagent/end` continuation or decision API waits for a concrete consumer.
+- **Forwarded child write approval is delegation-scoped and fresh-creation-only** — the route is captured at delegation; a cold-resumed child replays its pinned policy through a local fail-closed guard and never forwards. Covering another ask class (or another mutation family) needs its own explicit decision, and the parent session must have a live approval channel and an open turn at the ask.
 
 <a id="dev-note"></a>
 ### Dev Note
