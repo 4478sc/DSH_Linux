@@ -411,7 +411,9 @@ describe('CI workflow', () => {
       const cores = jobName === 'windows-native-tests' ? 2 : 16
       expect(evaluateRunsOn(job['runs-on'], { vars: { DSH_CI_FAILOVER_WINDOWS: 'blacksmith' } }))
         .toBe(`blacksmith-${cores}vcpu-windows-2025`)
-      expect(job.if).toBe("github.event_name == 'pull_request'")
+      // Daily pull requests use the hosted lanes; the in-house Windows pool is an
+      // explicit opt-in so a fork without it does not queue unrunnable jobs.
+      expect(job.if).toBe("github.event_name == 'pull_request' && vars.DSH_CI_SELFHOSTED_PR == 'true'")
     }
 
     // windows-build runs the blocking build/site pair.

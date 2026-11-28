@@ -37,7 +37,7 @@ function commands(job: Job): string[] {
 
 // These boolean/string cases share Actions and JavaScript semantics. GitHub
 // supplies status functions; this probe is not a general Actions interpreter.
-function evaluateCondition(expression: string, cancelled: boolean, results: string[], event = 'pull_request'): boolean {
+function evaluateCondition(expression: string, cancelled: boolean, results: string[], event = 'pull_request', vars: Record<string, string> = {}): boolean {
   const source = expression.trim().replace(/^[$][{][{]|[}][}]$/g, '')
     .replaceAll('needs.*.result', 'results')
   return runInNewContext(source, {
@@ -45,6 +45,7 @@ function evaluateCondition(expression: string, cancelled: boolean, results: stri
     always: () => true,
     contains: (values: string[], value: string) => values.includes(value),
     results,
+    vars,
     github: { event_name: event },
   }, { timeout: 1000 }) as boolean
 }
@@ -64,7 +65,16 @@ describe('master-only platform scheduling', () => {
       expect(evaluateCondition(condition, true, results)).toBe(false)
       expect(evaluateCondition(condition, false, results, 'push')).toBe(false)
       const failureStep = aggregate.steps!.find(step => step.name === 'Fail if any needed job did not succeed')!
-      expect(evaluateCondition(failureStep.if!, false, results)).toBe(result !== 'success')
+      // ci.yml and ci-windows.yml gate their in-house enterprise lanes behind
+      // DSH_CI_SELFHOSTED_PR so a fork can run daily checks on hosted runners.
+      // Their intentional skip is tolerated only while that opt-in is unset.
+      const optInLanes = file !== 'ci-python.yml'
+      const toleratedSkip = optInLanes && result === 'skipped'
+      expect(evaluateCondition(failureStep.if!, false, results)).toBe(result !== 'success' && !toleratedSkip)
+      if (optInLanes) {
+        expect(evaluateCondition(failureStep.if!, false, results, 'pull_request', { DSH_CI_SELFHOSTED_PR: 'true' }))
+          .toBe(result !== 'success')
+      }
       expect(failureStep.run).toContain('exit 1')
     },
   )

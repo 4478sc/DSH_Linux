@@ -39,7 +39,11 @@ jobs:
   # serial-linux-selfhosted standby lane in ci-master.yml. Native Windows jobs
   # and their separate DSH_CI_FAILOVER_WINDOWS switch live in ci-windows.yml.
   node-24:
-    if: github.event_name == 'pull_request'
+    # Daily pull-request verification runs on GitHub-hosted runners: the fork
+    # registers no self-hosted pool, so the enterprise labels below would queue
+    # forever. Set the DSH_CI_SELFHOSTED_PR repository variable to 'true' to keep
+    # this lane on the enterprise pool instead.
+    if: github.event_name == 'pull_request' && vars.DSH_CI_SELFHOSTED_PR == 'true'
     runs-on: >-
       ${{ vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-8vcpu-ubuntu-2404'
           || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
@@ -106,7 +110,11 @@ jobs:
         run: pnpm run check:ci:static
 
   node-24-coverage:
-    if: github.event_name == 'pull_request'
+    # Daily pull-request verification runs on GitHub-hosted runners: the fork
+    # registers no self-hosted pool, so the enterprise labels below would queue
+    # forever. Set the DSH_CI_SELFHOSTED_PR repository variable to 'true' to keep
+    # this lane on the enterprise pool instead.
+    if: github.event_name == 'pull_request' && vars.DSH_CI_SELFHOSTED_PR == 'true'
     runs-on: >-
       ${{ vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-16vcpu-ubuntu-2404'
           || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
@@ -227,7 +235,11 @@ jobs:
   # full rerun. The lane compiles package declarations because oxlint's
   # type-aware rules read them.
   node-24-lint:
-    if: github.event_name == 'pull_request'
+    # Daily pull-request verification runs on GitHub-hosted runners: the fork
+    # registers no self-hosted pool, so the enterprise labels below would queue
+    # forever. Set the DSH_CI_SELFHOSTED_PR repository variable to 'true' to keep
+    # this lane on the enterprise pool instead.
+    if: github.event_name == 'pull_request' && vars.DSH_CI_SELFHOSTED_PR == 'true'
     runs-on: >-
       ${{ vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-8vcpu-ubuntu-2404'
           || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
@@ -352,7 +364,11 @@ jobs:
           retention-days: 7
 
   node-24-consumers:
-    if: github.event_name == 'pull_request'
+    # Daily pull-request verification runs on GitHub-hosted runners: the fork
+    # registers no self-hosted pool, so the enterprise labels below would queue
+    # forever. Set the DSH_CI_SELFHOSTED_PR repository variable to 'true' to keep
+    # this lane on the enterprise pool instead.
+    if: github.event_name == 'pull_request' && vars.DSH_CI_SELFHOSTED_PR == 'true'
     runs-on: >-
       ${{ vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-16vcpu-ubuntu-2404'
           || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
@@ -630,7 +646,9 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     steps:
       - name: Fail if any needed job did not succeed
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        # The four enterprise lanes are opt-in on pull requests (DSH_CI_SELFHOSTED_PR);
+        # their intentional skip is not a failure, but any skip while they are opted in is.
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || (vars.DSH_CI_SELFHOSTED_PR == 'true' && contains(needs.*.result, 'skipped'))
         run: |
           echo "::error::Needed job results: ${{ join(needs.*.result, ', ') }}"
           exit 1

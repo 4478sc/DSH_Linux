@@ -30,7 +30,11 @@ jobs:
   # Blacksmith uses 2 vCPU for file-serial native tests and 16 for coverage
   # and the shared build/observational workspace.
   windows-build:
-    if: github.event_name == 'pull_request'
+    # Daily pull-request verification runs on GitHub-hosted runners: the fork
+    # registers no self-hosted pool, so the enterprise labels below would queue
+    # forever. Set the DSH_CI_SELFHOSTED_PR repository variable to 'true' to keep
+    # this lane on the in-house Windows pool instead.
+    if: github.event_name == 'pull_request' && vars.DSH_CI_SELFHOSTED_PR == 'true'
     runs-on: >-
       ${{ vars.DSH_CI_FAILOVER_WINDOWS == 'blacksmith' && 'blacksmith-16vcpu-windows-2025'
           || vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted'
@@ -119,7 +123,9 @@ jobs:
           $message | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
   windows-coverage:
-    if: github.event_name == 'pull_request'
+    # Opt-in with the rest of the in-house Windows pool: this lane only has a
+    # self-hosted label, so on a fork without that pool it would queue forever.
+    if: github.event_name == 'pull_request' && vars.DSH_CI_SELFHOSTED_PR == 'true'
     runs-on: >-
       ${{ vars.DSH_CI_FAILOVER_WINDOWS == 'blacksmith' && 'blacksmith-16vcpu-windows-2025'
           || vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted'
@@ -197,7 +203,11 @@ jobs:
           key: coverage-times-Windows-${{ runner.environment }}-${{ vars.DSH_CI_FAILOVER_WINDOWS || 'enterprise' }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   windows-native-tests:
-    if: github.event_name == 'pull_request'
+    # Daily pull-request verification runs on GitHub-hosted runners: the fork
+    # registers no self-hosted pool, so the enterprise labels below would queue
+    # forever. Set the DSH_CI_SELFHOSTED_PR repository variable to 'true' to keep
+    # this lane on the in-house Windows pool instead.
+    if: github.event_name == 'pull_request' && vars.DSH_CI_SELFHOSTED_PR == 'true'
     runs-on: >-
       ${{ vars.DSH_CI_FAILOVER_WINDOWS == 'blacksmith' && 'blacksmith-2vcpu-windows-2025'
           || vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted'
@@ -262,7 +272,9 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     steps:
       - name: Fail if any needed job did not succeed
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        # The four enterprise lanes are opt-in on pull requests (DSH_CI_SELFHOSTED_PR);
+        # their intentional skip is not a failure, but any skip while they are opted in is.
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || (vars.DSH_CI_SELFHOSTED_PR == 'true' && contains(needs.*.result, 'skipped'))
         run: |
           echo "::error::Needed job results: ${{ join(needs.*.result, ', ') }}"
           exit 1
